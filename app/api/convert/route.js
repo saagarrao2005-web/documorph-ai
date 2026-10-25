@@ -2,10 +2,18 @@ import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import CloudConvert from 'cloudconvert';
 
-const cloudconvert = new CloudConvert(process.env.CLOUDCONVERT_API_KEY);
-
 export async function POST(req) {
   try {
+    const apiKey = process.env.CLOUDCONVERT_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: 'CloudConvert API key is missing' },
+        { status: 500 }
+      );
+    }
+
+    const cloudconvert = new CloudConvert(apiKey);
+
     const formData = await req.formData();
     const file = formData.get('file');
 
@@ -15,6 +23,7 @@ export async function POST(req) {
 
     const timestamp = Date.now();
     const originalFileName = `${timestamp}-${file.name}`;
+    const fileExtension = file.name.split('.').pop().toLowerCase();
 
     const { error: uploadError } = await supabase.storage
       .from('documents')
@@ -28,34 +37,35 @@ export async function POST(req) {
       .from('documents')
       .getPublicUrl(originalFileName);
 
-    const inputUrl = publicUrlData.publicUrl;
-
     const job = await cloudconvert.jobs.create({
       tasks: {
-        'import-my-file': {
+        'import-file': {
           operation: 'import/url',
-          url: inputUrl,
+          url: publicUrlData.publicUrl,
         },
-        'convert-my-file': {
+        'convert-file': {
           operation: 'convert',
-          input: 'import-my-file',
+          input: 'import-file',
+          input_format: fileExtension,
           output_format: 'pdf',
         },
-        'export-my-file': {
+        'export-file': {
           operation: 'export/url',
-          input: 'convert-my-file',
+          input: 'convert-file',
         },
       },
     });
 
-    const queuedJob = await cloudconvert.jobs.wait(job.id);
-    const exportTask = queuedJob.tasks.find((task) => task.name === 'export-my-file');
-    const convertedFileUrl = exportTask.result.files[0].url;
+    const completedJob = await cloudconvert.jobs.wait(job.id);
+    const exportTask = completedJob.tasks.find((task) => task.name === 'export-file');
+
+    if (!exportTask || !exportTask.result || !exportTask.result.files[0]) {
+      return NextResponse.json({ error: 'Conversion failed' }, { status: 500 });
+    }
 
     return NextResponse.json({
       success: true,
-      url: convertedFileUrl,
-      message: 'File successfully converted!',
+      url: exportTask.result.files[0].url,
     });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
