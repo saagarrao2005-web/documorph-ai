@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { getSupabaseClient } from '@/lib/supabase';
 import CloudConvert from 'cloudconvert';
 
 export async function POST(req) {
@@ -12,6 +12,7 @@ export async function POST(req) {
       );
     }
 
+    const supabase = getSupabaseClient();
     const cloudconvert = new CloudConvert(apiKey);
 
     const formData = await req.formData();
