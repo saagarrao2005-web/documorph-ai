@@ -1,0 +1,4 @@
+fastapi
+fpdf2
+python-docx
+python-multipart
