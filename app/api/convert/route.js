@@ -13,11 +13,9 @@ export async function POST(req) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // Get Supabase client safely
     const supabase = getSupabaseClient();
     const fileName = `${Date.now()}_${file.name.replace(/\s+/g, '_')}`;
 
-    // Upload file directly to Supabase storage bucket 'documents'
     const { data: uploadData, error: uploadError } = await supabase.storage
       .from('documents')
       .upload(fileName, buffer, {
@@ -29,7 +27,6 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: uploadError.message }, { status: 500 });
     }
 
-    // Retrieve public URL
     const { data: urlData } = supabase.storage
       .from('documents')
       .getPublicUrl(fileName);
