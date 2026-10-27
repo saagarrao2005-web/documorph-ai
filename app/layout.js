@@ -1,5 +1,3 @@
-import './globals.css';
-
 export const metadata = {
   title: 'DocuMorph AI',
   description: 'File conversion made easy',

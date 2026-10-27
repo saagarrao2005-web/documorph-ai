@@ -40,42 +40,36 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6">
-      <div className="max-w-md w-full bg-slate-800 p-8 rounded-xl shadow-lg border border-slate-700">
-        <h1 className="text-2xl font-bold text-center mb-6 text-blue-400">
-          DocuMorph Converter
-        </h1>
-
-        <form onSubmit={handleConvert} className="space-y-4">
+    <main style={{ minHeight: '100vh', backgroundColor: '#0f172a', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif' }}>
+      <div style={{ backgroundColor: '#1e293b', padding: '2rem', borderRadius: '12px', width: '100%', maxWidth: '400px', textAlign: 'center' }}>
+        <h1 style={{ color: '#60a5fa', marginBottom: '1.5rem' }}>DocuMorph Converter</h1>
+        <form onSubmit={handleConvert} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <input
             type="file"
             onChange={(e) => setFile(e.target.files[0])}
-            className="block w-full text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
             required
+            style={{ color: '#cbd5e1' }}
           />
-
           <button
             type="submit"
             disabled={loading || !file}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 rounded-md font-semibold transition"
+            style={{ padding: '0.75rem', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
           >
             {loading ? 'Processing...' : 'Upload & Convert'}
           </button>
         </form>
 
         {error && (
-          <div className="mt-4 p-3 bg-red-900/50 border border-red-500 text-red-300 rounded text-sm text-center">
-            {error}
-          </div>
+          <p style={{ color: '#f87171', marginTop: '1rem', fontSize: '0.875rem' }}>{error}</p>
         )}
 
         {downloadUrl && (
-          <div className="mt-6 text-center">
+          <div style={{ marginTop: '1.5rem' }}>
             <a
               href={downloadUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-block px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-md transition"
+              style={{ display: 'inline-block', padding: '0.5rem 1rem', backgroundColor: '#10b981', color: '#fff', borderRadius: '6px', textDecoration: 'none' }}
             >
               Download Converted File
             </a>
