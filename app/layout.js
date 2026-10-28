@@ -1,7 +1,4 @@
-export const metadata = {
-  title: 'DocuMorph AI',
-  description: 'File conversion made easy',
-};
+import './globals.css';
 
 export default function RootLayout({ children }) {
   return (
