@@ -8,11 +8,17 @@ from docx import Document
 
 app = FastAPI(title="DocuMorph Python Backend")
 
-# Enable CORS to allow Next.js (running on localhost:3000 or Vercel) to make requests
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("DOCUMORPH_ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    if origin.strip()
+]
+
+# The browser calls this Python service directly; list the deployed frontend origin here.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust this to your specific frontend URL in production
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -21,7 +27,7 @@ app.add_middleware(
 def read_root():
     return {"status": "DocuMorph Python Conversion Backend is Online"}
 
-@app.post("/api/py/convert")
+@app.post("/convert")
 async def convert_file_to_pdf(file: UploadFile = File(...)):
     """
     Receives an uploaded file (DOCX, TXT, etc.) and converts it directly to a PDF stream.
@@ -79,6 +85,8 @@ async def convert_file_to_pdf(file: UploadFile = File(...)):
             }
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -20,6 +20,17 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Python file conversion
+
+The file converter sends DOCX and TXT uploads directly from the browser to the FastAPI service. The Python service returns the converted PDF for download; the Next.js app does not need a conversion API route.
+
+Deploy the `backend` folder as a Python ASGI service with `main:app` as the application. Configure these environment variables:
+
+- In Vercel, set `NEXT_PUBLIC_PYTHON_BACKEND_URL` to the backend's base URL, with no trailing slash. Redeploy after changing it.
+- In the Python service, set `DOCUMORPH_ALLOWED_ORIGINS` to the exact website origin, such as `https://your-domain.vercel.app`. For multiple origins, separate them with commas. `http://localhost:3000` is allowed by default for local development.
+
+The current Python converter supports `.docx` and `.txt` files to PDF. Other format conversions and document size reduction are not implemented by this backend yet.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

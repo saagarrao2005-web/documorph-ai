@@ -11,20 +11,15 @@ import {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const fmt = (b) => (b > 1048576 ? (b / 1048576).toFixed(2) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB");
 
-async function api(route, body) {
-  try {
-    const r = await fetch(`/api/${route}`, { method: "POST", body });
-    if (r.ok) return await r.json();
-  } catch {}
-  await sleep(900 + Math.random() * 700);
-  return { mock: true };
-}
+const PYTHON_BACKEND_URL = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL?.replace(/\/+$/, "");
 
 const save = (blob, name) => {
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
+  const url = URL.createObjectURL(blob);
+  a.href = url;
   a.download = name;
   a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 };
 
 const loadImg = (file) =>
@@ -141,12 +136,12 @@ function Generate({ toast, st }) {
     if (prompt.trim().length < 8) return toast("Describe your document in a few words first.");
     setDoc(null); setBusy(8);
     const t = setInterval(() => setBusy((b) => Math.min(92, b + 9)), 220);
-    await api("generate", (() => { const f = new FormData(); f.append("prompt", prompt); f.append("format", format); return f; })());
+    await sleep(900 + Math.random() * 700);
     clearInterval(t); setBusy(0);
     const topic = prompt.trim().replace(/^(make|create|write|generate)\s+(a|an|me)?\s*/i, "").slice(0, 60);
     const names = ["Overview", "The problem", "Our approach", "Key findings", "Timeline", "Risks and fixes", "Budget", "Next steps", "Appendix", "References", "Case study", "Summary"];
     setDoc({ topic, sections: names.slice(0, pages).map((n, i) => ({ n, body: `${tone} copy about “${topic}” — section ${i + 1} of ${pages}, with headings, key points and a closing takeaway.` })) });
-    toast(`${format} generated`);
+    toast("Draft preview created. Document generation is not connected to the Python converter yet.");
     if (st.auto) exportDoc({ topic, sections: names.slice(0, pages).map((n) => ({ n, body: "" })) });
   };
 
@@ -193,28 +188,37 @@ function Generate({ toast, st }) {
 }
 
 /* ---------- tool 2: converter ---------- */
-const TARGETS = { pdf: ["Word", "PPT", "PNG"], docx: ["PDF"], doc: ["PDF"], pptx: ["PDF"], ppt: ["PDF"], png: ["PDF", "JPG", "WebP"], jpg: ["PDF", "PNG", "WebP"], jpeg: ["PDF", "PNG", "WebP"], webp: ["PDF", "PNG", "JPG"] };
+const TARGETS = { docx: ["PDF"], txt: ["PDF"] };
 function Convert({ toast }) {
   const [q, setQ] = useState([]);
 
-  const add = (files) => setQ((x) => [...x, ...files.map((f) => { const e = f.name.split(".").pop().toLowerCase(); const opts = TARGETS[e] || ["PDF"]; return { id: Math.random(), f, to: opts[0], opts, p: 0, done: false, url: null }; })]);
+  const add = (files) => {
+    const supported = files.filter((f) => TARGETS[f.name.split(".").pop().toLowerCase()]);
+    if (supported.length !== files.length) toast("The Python backend currently supports DOCX and TXT files only.");
+    setQ((x) => [...x, ...supported.map((f) => ({ id: Math.random(), f, to: "PDF", p: 0, done: false, url: null }))]);
+  };
   const patch = (id, o) => setQ((x) => x.map((i) => (i.id === id ? { ...i, ...o } : i)));
 
   const go = async (i) => {
     patch(i.id, { p: 10 });
     const f = new FormData();
     f.append("file", i.f);
-    f.append("to", i.to);
 
     try {
-      const res = await fetch("/api/convert", { method: "POST", body: f });
-      const data = await res.json();
-      if (data.success && data.url) {
-        patch(i.id, { p: 100, done: true, url: data.url });
-        toast(`${i.f.name} converted successfully`);
-      } else {
-        throw new Error(data.error || "Conversion failed");
+      if (!PYTHON_BACKEND_URL) throw new Error("Set NEXT_PUBLIC_PYTHON_BACKEND_URL to your deployed Python backend URL.");
+      const res = await fetch(`${PYTHON_BACKEND_URL}/convert`, { method: "POST", body: f });
+      if (!res.ok) {
+        let detail = "Conversion failed";
+        try { detail = (await res.json()).detail || detail; } catch {}
+        throw new Error(detail);
       }
+      const blob = await res.blob();
+      if (!blob.type.includes("pdf")) throw new Error("The Python backend did not return a PDF file.");
+      const outputName = `${i.f.name.replace(/\.[^.]+$/, "")}.pdf`;
+      const url = URL.createObjectURL(blob);
+      save(blob, outputName);
+      patch(i.id, { p: 100, done: true, url, outputName });
+      toast(`${i.f.name} converted and downloaded`);
     } catch (err) {
       patch(i.id, { p: 0 });
       toast(`Error: ${err.message}`);
@@ -223,7 +227,7 @@ function Convert({ toast }) {
 
   return (
     <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
-      <Panel title="Drop files"><Drop multiple onFiles={add} accept=".pdf,.doc,.docx,.ppt,.pptx,.png,.jpg,.jpeg,.webp" title="Drop files to convert" hint="PDF, Word, PPT, PNG, JPG, WebP" /></Panel>
+      <Panel title="Drop files"><Drop multiple onFiles={add} accept=".docx,.txt" title="Drop a Word or text file" hint="DOCX and TXT convert to PDF" /></Panel>
       <Panel title="Queue" right={q.length > 0 && <Ghost onClick={() => q.filter((i) => !i.done).forEach(go)}>Convert all</Ghost>}>
         {!q.length ? <Empty icon={ArrowLeftRight} text="Added files show up here with the formats they can become." /> : (
           <div className="space-y-3">
@@ -231,8 +235,8 @@ function Convert({ toast }) {
               <motion.div layout key={i.id} initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, x: 40 }} className="rounded-2xl border border-[var(--line)] p-4">
                 <div className="flex items-center gap-3">
                   <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{i.f.name}</div><div className="text-xs text-[var(--mut)]">{fmt(i.f.size)}</div></div>
-                  <select value={i.to} onChange={(e) => patch(i.id, { to: e.target.value })} className="rounded-full border border-[var(--line)] bg-transparent px-3 py-1.5 text-sm">{i.opts.map((o) => <option key={o} className="text-black">{o}</option>)}</select>
-                  {i.done ? <a href={i.url} target="_blank" rel="noopener noreferrer"><Ghost><Check size={15} /> Download</Ghost></a> : <Primary onClick={() => go(i)} disabled={i.p > 0}>Convert</Primary>}
+                  <span className="rounded-full border border-[var(--line)] px-3 py-1.5 text-sm">PDF</span>
+                  {i.done ? <a href={i.url} download={i.outputName}><Ghost><Check size={15} /> Download PDF</Ghost></a> : <Primary onClick={() => go(i)} disabled={i.p > 0}>Convert to PDF</Primary>}
                   <button aria-label="Remove" onClick={() => setQ((x) => x.filter((y) => y.id !== i.id))} className="text-[var(--mut)]"><X size={16} /></button>
                 </div>
                 {i.p > 0 && <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--line)]"><motion.div className="h-full bg-[var(--accent)]" animate={{ width: i.p + "%" }} /></div>}
@@ -271,7 +275,7 @@ function Modify({ toast }) {
             <Slider label="Resolution" value={scale} min={25} max={200} step={5} onChange={setScale} suffix="%" />
             <div className="grid grid-cols-2 gap-3"><Stat k="Output" v={`${dims.w}×${dims.h}`} /><Stat k="Source" v={`${img.naturalWidth}×${img.naturalHeight}`} /></div>
             <div className="flex gap-2"><input value={ask} onChange={(e) => setAsk(e.target.value)} placeholder="Replace: the sky with sunset" className="min-w-0 flex-1 rounded-full border border-[var(--line)] bg-transparent px-4 text-sm outline-none focus:border-[var(--accent)]" />
-              <Ghost onClick={async () => { if (!ask) return toast("Say what to replace first."); const f = new FormData(); f.append("edit", ask); await api("image", f); toast("Edit queued for the AI worker"); }}><Sparkles size={15} /></Ghost></div>
+              <Ghost onClick={() => toast(ask ? "AI image editing is not connected to the Python backend yet." : "Describe the image edit first.")}><Sparkles size={15} /></Ghost></div>
             <div className="flex gap-2"><Primary className="flex-1" onClick={() => cv.current.toBlob((b) => { save(b, "documorph.png"); toast("Saved as PNG"); })}><Download size={15} /> Download PNG</Primary><Ghost onClick={() => setImg(null)}>New image</Ghost></div>
           </div>
         )}
@@ -352,7 +356,7 @@ function Reduce({ toast }) {
   const Bar = ({ k, v }) => (<div><div className="mb-1 flex justify-between text-xs"><span className="text-[var(--mut)]">{k}</span><b>{v}%</b></div><div className="h-2 rounded-full bg-[var(--line)]"><motion.div className="h-full rounded-full bg-gradient-to-r from-[var(--accent)] to-[#ffb36b]" animate={{ width: v + "%" }} /></div></div>);
   const m = { fidelity: Math.round(60 + pct * 0.4), text: Math.min(100, Math.round(78 + pct * 0.22)), color: Math.round(55 + pct * 0.45) };
 
-  const run = async () => { setBusy(true); setDone(false); const d = new FormData(); d.append("file", f); d.append("target", pct); await api("compress", d); setBusy(false); setDone(true); toast("Document reduced"); };
+  const run = () => toast("Document size reduction is not supported by the current Python backend yet.");
 
   return (
     <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
@@ -369,7 +373,7 @@ function Reduce({ toast }) {
       <Panel title="Quality metrics">
         {!f ? <Empty icon={FileArchive} text="See what you trade for every megabyte saved." /> : (
           <div className="space-y-5"><Bar k="Image fidelity" v={m.fidelity} /><Bar k="Text sharpness" v={m.text} /><Bar k="Colour accuracy" v={m.color} />
-            <AnimatePresence>{done && <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between rounded-2xl bg-[var(--accent)]/12 p-4 text-sm"><span><b>{fmt(f.size)}</b> to <b>{fmt((f.size * pct) / 100)}</b></span><Ghost onClick={() => toast("Download starts once /api/compress is connected")}><Download size={15} /> Download</Ghost></motion.div>}</AnimatePresence></div>
+            <AnimatePresence>{done && <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between rounded-2xl bg-[var(--accent)]/12 p-4 text-sm"><span><b>{fmt(f.size)}</b> to <b>{fmt((f.size * pct) / 100)}</b></span></motion.div>}</AnimatePresence></div>
         )}
       </Panel>
     </div>
@@ -476,7 +480,7 @@ export default function Page() {
         </section>
       </main>
 
-      <footer className="relative border-t border-[var(--line)] px-5 py-10 text-center text-sm text-[var(--mut)]">DocuMorph AI. Files process cleanly via Next.js and Supabase backend services.</footer>
+      <footer className="relative border-t border-[var(--line)] px-5 py-10 text-center text-sm text-[var(--mut)]">DocuMorph AI. DOCX and TXT conversion is handled by the Python backend.</footer>
 
       {/* settings drawer */}
       <AnimatePresence>{drawer && (<>

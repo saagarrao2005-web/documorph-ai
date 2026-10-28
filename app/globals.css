@@ -1,1 +1,13 @@
 @import "tailwindcss";
+
+/* Keep utility discovery anchored to the App Router page in Vercel builds. */
+@source "./page.js";
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+}
