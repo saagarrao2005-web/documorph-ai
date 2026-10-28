@@ -191,6 +191,7 @@ function Generate({ toast, st }) {
 const TARGETS = { docx: ["PDF"], txt: ["PDF"] };
 function Convert({ toast }) {
   const [q, setQ] = useState([]);
+  const inFlight = useRef(new Set());
 
   const add = (files) => {
     const supported = files.filter((f) => TARGETS[f.name.split(".").pop().toLowerCase()]);
@@ -200,12 +201,14 @@ function Convert({ toast }) {
   const patch = (id, o) => setQ((x) => x.map((i) => (i.id === id ? { ...i, ...o } : i)));
 
   const go = async (i) => {
+    if (inFlight.current.has(i.id)) return;
+    inFlight.current.add(i.id);
     patch(i.id, { p: 10 });
     const f = new FormData();
     f.append("file", i.f);
 
     try {
-      if (!PYTHON_BACKEND_URL) throw new Error("Set NEXT_PUBLIC_PYTHON_BACKEND_URL to your deployed Python backend URL.");
+      if (!PYTHON_BACKEND_URL) throw new Error("Backend URL is missing. Add NEXT_PUBLIC_PYTHON_BACKEND_URL in Vercel, then redeploy.");
       const res = await fetch(`${PYTHON_BACKEND_URL}/convert`, { method: "POST", body: f });
       if (!res.ok) {
         let detail = "Conversion failed";
@@ -221,7 +224,12 @@ function Convert({ toast }) {
       toast(`${i.f.name} converted and downloaded`);
     } catch (err) {
       patch(i.id, { p: 0 });
-      toast(`Error: ${err.message}`);
+      const message = err.message === "Failed to fetch"
+        ? "Cannot reach the Python backend. Check its public URL, status, and allowed website origin."
+        : err.message;
+      toast(`Error: ${message}`);
+    } finally {
+      inFlight.current.delete(i.id);
     }
   };
 
@@ -406,7 +414,11 @@ export default function Page() {
   const [st, setSt] = useState({ accent: "Rose", quality: 80, auto: false });
   const [toasts, setToasts] = useState([]);
 
-  const toast = useCallback((m) => { const id = Math.random(); setToasts((t) => [...t, { id, m }]); setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200); }, []);
+  const toast = useCallback((m) => {
+    const id = Math.random();
+    setToasts((current) => current.some((item) => item.m === m) ? current : [...current, { id, m }]);
+    setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 3200);
+  }, []);
   const open = (id) => { setTool(id); document.getElementById("workbench")?.scrollIntoView({ behavior: "smooth" }); };
   const View = { generate: Generate, convert: Convert, modify: Modify, image: CompressImage, reduce: Reduce }[tool];
   const words = "Every file, reshaped in seconds.".split(" ");
