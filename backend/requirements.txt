@@ -3,5 +3,3 @@ uvicorn
 python-multipart
 fpdf2
 python-docx
-pdf2image
-pypdf
