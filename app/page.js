@@ -8,10 +8,10 @@ import {
 } from "lucide-react";
 
 /* ---------- helpers ---------- */
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const fmt = (b) => (b > 1048576 ? (b / 1048576).toFixed(2) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB");
 
-const PYTHON_BACKEND_URL = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL?.replace(/\/+$/, "");
+const PYTHON_BACKEND_URL = (process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || "https://documorph-ai-tpa4.vercel.app").replace(/\/+$/, "");
+const MAX_BACKEND_UPLOAD_BYTES = 4 * 1024 * 1024;
 
 const save = (blob, name) => {
   const a = document.createElement("a");
@@ -21,6 +21,37 @@ const save = (blob, name) => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 };
+
+async function backendFile(path, formData) {
+  if (!PYTHON_BACKEND_URL) {
+    throw new Error("Backend URL is missing. Add NEXT_PUBLIC_PYTHON_BACKEND_URL to the website project in Vercel, then redeploy the website.");
+  }
+
+  let response;
+  try {
+    response = await fetch(`${PYTHON_BACKEND_URL}${path}`, { method: "POST", body: formData });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error("Cannot reach the Python backend. Check its Vercel URL and CORS settings.");
+    }
+    throw error;
+  }
+
+  if (!response.ok) {
+    let message = `Backend request failed (${response.status})`;
+    try {
+      const body = await response.json();
+      message = body.detail || body.error || message;
+    } catch {}
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  if (!blob.size) throw new Error("The backend returned an empty file.");
+  const disposition = response.headers.get("content-disposition") || "";
+  const filename = disposition.match(/filename\*?=(?:UTF-8''|\")?([^\";]+)/i)?.[1];
+  return { blob, filename: filename ? decodeURIComponent(filename.replace(/\"/g, "")) : null, response };
+}
 
 const loadImg = (file) =>
   new Promise((res) => {
@@ -136,18 +167,28 @@ function Generate({ toast, st }) {
     if (prompt.trim().length < 8) return toast("Describe your document in a few words first.");
     setDoc(null); setBusy(8);
     const t = setInterval(() => setBusy((b) => Math.min(92, b + 9)), 220);
-    await sleep(900 + Math.random() * 700);
-    clearInterval(t); setBusy(0);
     const topic = prompt.trim().replace(/^(make|create|write|generate)\s+(a|an|me)?\s*/i, "").slice(0, 60);
     const names = ["Overview", "The problem", "Our approach", "Key findings", "Timeline", "Risks and fixes", "Budget", "Next steps", "Appendix", "References", "Case study", "Summary"];
-    setDoc({ topic, sections: names.slice(0, pages).map((n, i) => ({ n, body: `${tone} copy about “${topic}” — section ${i + 1} of ${pages}, with headings, key points and a closing takeaway.` })) });
-    toast("Draft preview created. Document generation is not connected to the Python converter yet.");
-    if (st.auto) exportDoc({ topic, sections: names.slice(0, pages).map((n) => ({ n, body: "" })) });
+    const sections = names.slice(0, pages).map((n, i) => ({ n, body: `${tone} copy about “${topic}” — section ${i + 1} of ${pages}, with headings, key points and a closing takeaway.` }));
+    try {
+      const form = new FormData();
+      form.append("topic", topic);
+      form.append("sections", JSON.stringify(sections));
+      form.append("format", format);
+      const { blob, filename } = await backendFile("/generate", form);
+      setDoc({ topic, sections, blob, filename: filename || `documorph.${format === "PPT" ? "pptx" : format === "Word" ? "docx" : "pdf"}` });
+      if (st.auto) save(blob, filename || `documorph.${format === "PPT" ? "pptx" : format === "Word" ? "docx" : "pdf"}`);
+      toast(`${format} created by your Python backend`);
+    } catch (error) {
+      toast(`Error: ${error.message}`);
+    } finally {
+      clearInterval(t); setBusy(0);
+    }
   };
 
   const exportDoc = (d = doc) => {
-    const md = `# ${d.topic}\n\n` + d.sections.map((s) => `## ${s.n}\n${s.body}\n`).join("\n");
-    format === "Word" ? save(new Blob([`<html><body><h1>${d.topic}</h1>${d.sections.map((s) => `<h2>${s.n}</h2><p>${s.body}</p>`).join("")}</body></html>`], { type: "application/msword" }), "documorph.doc") : save(new Blob([md], { type: "text/markdown" }), "documorph-outline.md");
+    if (!d?.blob) return toast("Generate the document first.");
+    save(d.blob, d.filename);
     toast("Downloaded");
   };
 
@@ -188,15 +229,24 @@ function Generate({ toast, st }) {
 }
 
 /* ---------- tool 2: converter ---------- */
-const TARGETS = { docx: ["PDF"], txt: ["PDF"] };
+const TARGETS = {
+  docx: ["PDF", "TXT"],
+  pptx: ["PDF", "DOCX", "TXT"],
+  pdf: ["DOCX", "TXT"],
+  txt: ["PDF", "DOCX"],
+  jpg: ["PDF", "PNG", "WEBP"],
+  jpeg: ["PDF", "PNG", "WEBP"],
+  png: ["PDF", "JPG", "WEBP"],
+  webp: ["PDF", "PNG", "JPG"],
+};
 function Convert({ toast }) {
   const [q, setQ] = useState([]);
   const inFlight = useRef(new Set());
 
   const add = (files) => {
-    const supported = files.filter((f) => TARGETS[f.name.split(".").pop().toLowerCase()]);
-    if (supported.length !== files.length) toast("The Python backend currently supports DOCX and TXT files only.");
-    setQ((x) => [...x, ...supported.map((f) => ({ id: Math.random(), f, to: "PDF", p: 0, done: false, url: null }))]);
+    const supported = files.filter((f) => f.size <= MAX_BACKEND_UPLOAD_BYTES && TARGETS[f.name.split(".").pop().toLowerCase()]);
+    if (supported.length !== files.length) toast("Some files were skipped. Use PDF, DOCX, PPTX, TXT, JPG, PNG or WebP under 4 MB.");
+    setQ((x) => [...x, ...supported.map((f) => { const opts = TARGETS[f.name.split(".").pop().toLowerCase()]; return { id: Math.random(), f, to: opts[0], opts, p: 0, done: false, url: null }; })]);
   };
   const patch = (id, o) => setQ((x) => x.map((i) => (i.id === id ? { ...i, ...o } : i)));
 
@@ -206,28 +256,19 @@ function Convert({ toast }) {
     patch(i.id, { p: 10 });
     const f = new FormData();
     f.append("file", i.f);
+    f.append("target_format", i.to);
 
     try {
-      if (!PYTHON_BACKEND_URL) throw new Error("Backend URL is missing. Add NEXT_PUBLIC_PYTHON_BACKEND_URL in Vercel, then redeploy.");
-      const res = await fetch(`${PYTHON_BACKEND_URL}/convert`, { method: "POST", body: f });
-      if (!res.ok) {
-        let detail = "Conversion failed";
-        try { detail = (await res.json()).detail || detail; } catch {}
-        throw new Error(detail);
-      }
-      const blob = await res.blob();
-      if (!blob.type.includes("pdf")) throw new Error("The Python backend did not return a PDF file.");
-      const outputName = `${i.f.name.replace(/\.[^.]+$/, "")}.pdf`;
+      const { blob, filename } = await backendFile("/convert", f);
+      const extension = i.to === "WORD" ? "docx" : i.to.toLowerCase();
+      const outputName = filename || `${i.f.name.replace(/\.[^.]+$/, "")}.${extension}`;
       const url = URL.createObjectURL(blob);
       save(blob, outputName);
       patch(i.id, { p: 100, done: true, url, outputName });
       toast(`${i.f.name} converted and downloaded`);
     } catch (err) {
       patch(i.id, { p: 0 });
-      const message = err.message === "Failed to fetch"
-        ? "Cannot reach the Python backend. Check its public URL, status, and allowed website origin."
-        : err.message;
-      toast(`Error: ${message}`);
+      toast(`Error: ${err.message}`);
     } finally {
       inFlight.current.delete(i.id);
     }
@@ -235,7 +276,7 @@ function Convert({ toast }) {
 
   return (
     <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
-      <Panel title="Drop files"><Drop multiple onFiles={add} accept=".docx,.txt" title="Drop a Word or text file" hint="DOCX and TXT convert to PDF" /></Panel>
+      <Panel title="Drop files"><Drop multiple onFiles={add} accept=".pdf,.docx,.pptx,.txt,.jpg,.jpeg,.png,.webp" title="Drop files to convert" hint="PDF, Word, PPTX, TXT, JPG, PNG, WebP" /></Panel>
       <Panel title="Queue" right={q.length > 0 && <Ghost onClick={() => q.filter((i) => !i.done).forEach(go)}>Convert all</Ghost>}>
         {!q.length ? <Empty icon={ArrowLeftRight} text="Added files show up here with the formats they can become." /> : (
           <div className="space-y-3">
@@ -243,8 +284,8 @@ function Convert({ toast }) {
               <motion.div layout key={i.id} initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, x: 40 }} className="rounded-2xl border border-[var(--line)] p-4">
                 <div className="flex items-center gap-3">
                   <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{i.f.name}</div><div className="text-xs text-[var(--mut)]">{fmt(i.f.size)}</div></div>
-                  <span className="rounded-full border border-[var(--line)] px-3 py-1.5 text-sm">PDF</span>
-                  {i.done ? <a href={i.url} download={i.outputName}><Ghost><Check size={15} /> Download PDF</Ghost></a> : <Primary onClick={() => go(i)} disabled={i.p > 0}>Convert to PDF</Primary>}
+                  <select value={i.to} onChange={(e) => patch(i.id, { to: e.target.value })} disabled={i.p > 0} className="rounded-full border border-[var(--line)] bg-[var(--bg)] px-3 py-1.5 text-sm">{i.opts.map((option) => <option key={option} value={option}>{option}</option>)}</select>
+                  {i.done ? <a href={i.url} download={i.outputName}><Ghost><Check size={15} /> Download {i.to}</Ghost></a> : <Primary onClick={() => go(i)} disabled={i.p > 0}>Convert to {i.to}</Primary>}
                   <button aria-label="Remove" onClick={() => setQ((x) => x.filter((y) => y.id !== i.id))} className="text-[var(--mut)]"><X size={16} /></button>
                 </div>
                 {i.p > 0 && <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--line)]"><motion.div className="h-full bg-[var(--accent)]" animate={{ width: i.p + "%" }} /></div>}
@@ -360,16 +401,40 @@ function Reduce({ toast }) {
   const [pct, setPct] = useState(40);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  const [result, setResult] = useState(null);
 
   const Bar = ({ k, v }) => (<div><div className="mb-1 flex justify-between text-xs"><span className="text-[var(--mut)]">{k}</span><b>{v}%</b></div><div className="h-2 rounded-full bg-[var(--line)]"><motion.div className="h-full rounded-full bg-gradient-to-r from-[var(--accent)] to-[#ffb36b]" animate={{ width: v + "%" }} /></div></div>);
   const m = { fidelity: Math.round(60 + pct * 0.4), text: Math.min(100, Math.round(78 + pct * 0.22)), color: Math.round(55 + pct * 0.45) };
 
-  const run = () => toast("Document size reduction is not supported by the current Python backend yet.");
+  const run = async () => {
+    if (!f || busy) return;
+    setBusy(true);
+    setDone(false);
+    setResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", f);
+      form.append("target_pct", String(pct));
+      const { blob, filename } = await backendFile("/reduce", form);
+      const outputName = filename || `${f.name.replace(/\.[^.]+$/, "")}_reduced.${f.name.split(".").pop().toLowerCase()}`;
+      setResult({ blob, filename: outputName, size: blob.size });
+      setDone(true);
+      toast("Reduced file is ready to download");
+    } catch (error) {
+      toast(`Error: ${error.message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
       <Panel title="Target size">
-        {!f ? <Drop accept=".pdf,.doc,.docx,.ppt,.pptx" onFiles={([x]) => x && (setF(x), setDone(false))} title="Drop a PDF, Word or PPT" hint="Up to 50 MB" /> : (
+        {!f ? <Drop accept=".pdf,.docx,.pptx" onFiles={([x]) => {
+          if (!x) return;
+          if (x.size > MAX_BACKEND_UPLOAD_BYTES) return toast("Vercel file uploads must be under 4 MB. Try a smaller file.");
+          setF(x); setDone(false); setResult(null);
+        }} title="Drop a PDF, Word or PPTX" hint="PDF, DOCX and PPTX · up to 4 MB" /> : (
           <div className="space-y-5">
             <div className="truncate text-sm font-semibold">{f.name}</div>
             <Slider label="Keep this much of the original" value={pct} min={10} max={90} step={5} onChange={(v) => { setPct(v); setDone(false); }} suffix="%" />
@@ -381,7 +446,7 @@ function Reduce({ toast }) {
       <Panel title="Quality metrics">
         {!f ? <Empty icon={FileArchive} text="See what you trade for every megabyte saved." /> : (
           <div className="space-y-5"><Bar k="Image fidelity" v={m.fidelity} /><Bar k="Text sharpness" v={m.text} /><Bar k="Colour accuracy" v={m.color} />
-            <AnimatePresence>{done && <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between rounded-2xl bg-[var(--accent)]/12 p-4 text-sm"><span><b>{fmt(f.size)}</b> to <b>{fmt((f.size * pct) / 100)}</b></span></motion.div>}</AnimatePresence></div>
+            <AnimatePresence>{done && result && <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between gap-3 rounded-2xl bg-[var(--accent)]/12 p-4 text-sm"><span><b>{fmt(f.size)}</b> to <b>{fmt(result.size)}</b></span><Ghost onClick={() => save(result.blob, result.filename)}><Download size={15} /> Download</Ghost></motion.div>}</AnimatePresence></div>
         )}
       </Panel>
     </div>

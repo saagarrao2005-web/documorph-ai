@@ -3,3 +3,6 @@ uvicorn
 python-multipart
 fpdf2
 python-docx
+python-pptx
+pypdf
+pillow
